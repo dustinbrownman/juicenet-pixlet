@@ -9,6 +9,10 @@ API_METHOD = "/box_pin"
 SECURE_API_METHOD = "/box_api_secure"
 DEFAULT_DEVICE_UUID = "8dbab88c-7156-49c3-ab09-e9f6134d5469"
 
+yellow = "#ff0"
+green = "#0f0"
+white = "#fff"
+
 def main(config):
     api_token = config.str("api_token")
     device_id = config.str("device_id") or DEFAULT_DEVICE_UUID
@@ -18,23 +22,62 @@ def main(config):
 
 
     charger_token = get_charger_token(api_token, device_id)
-    charger_state = config.str("state") or get_charger_state(api_token, charger_token, device_id)
+    charger_state = get_charger_state(api_token, charger_token, device_id)
+
+    state = config.get("state") or charger_state["state"]
+
+    info_column_content = [
+        render.Padding(
+            pad=(0, 0, 0, 4),
+            child=render.Text(
+                content="JuiceBox",
+                font="tom-thumb",
+            ),
+        ),
+        render.Padding(
+            pad=(0, 0, 0, 4),
+            child=render.Text(
+                content=normalized_state(state),
+                font="CG-pixel-4x5-mono",
+            ),
+        ),
+    ]
+
+    if state == "charging" or state == "plugged":
+        kwh = config.get("kwh") or charger_state["charging"]["wh_energy"] / 1000
+
+        info_column_content.append(render.Text(
+            content="+" + str(percision_one(kwh)) + " kWh",
+            font="tom-thumb",
+            color=state == "charging" and green or yellow,
+        ))
 
     columns = [
         render.Column(
             expanded=True,
             main_align="center",
             children=[
-                render.Text(
-                    content = normalized_state(charger_state),
-                ),
+                # Box provides set width and height to the child
+                render.Box(
+                    width=40,
+                    height=32,
+                    child=render.Column(
+                        expanded=True,
+                        main_align="center",
+                        cross_align="center",
+                        children=info_column_content
+                    ),
+                )
+
             ]
         ),
         render.Column(
             expanded=True,
             main_align="center",
             cross_align="center",
-            children=[get_animation(charger_state)],
+            children=[
+                get_animation(state),
+            ],
         ),
     ]
 
@@ -95,12 +138,14 @@ def get_charger_state(api_token, charger_token, device_id):
     if body["success"] != True:
         fail("Failed to get charger state: %s" % body["error_message"])
 
-
-    return body["state"]
+    return body
 
 def charging_animation():
     return animation.Transformation(
-        child=render.Circle(diameter=16, color="#0f0"),
+        child=render.Circle(
+            diameter=16,
+            color=green,
+        ),
         duration=24,
         delay=0,
         width=16,
@@ -121,7 +166,7 @@ def charging_animation():
 
 def standby_animation():
     return animation.Transformation(
-        child=render.Circle(diameter=8, color="#fff"),
+        child=render.Circle(diameter=8, color=white),
         duration=42,
         delay=0,
         width=16,
@@ -143,7 +188,7 @@ def standby_animation():
 
 def plugged_animation():
     return animation.Transformation(
-        child=render.Circle(diameter=12, color="#ff0"),
+        child=render.Circle(diameter=12, color=yellow),
         duration=18,
         delay=18,
         width=12,
@@ -186,3 +231,6 @@ def normalized_state(state):
         return "Plugged"
     else:
         return "Unknown"
+
+def percision_one(number):
+    return int(float(number) * 10) / 10.0

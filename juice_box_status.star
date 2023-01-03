@@ -9,23 +9,44 @@ API_METHOD = "/box_pin"
 SECURE_API_METHOD = "/box_api_secure"
 DEFAULT_DEVICE_UUID = "8dbab88c-7156-49c3-ab09-e9f6134d5469"
 
+BAD_API_RESPONSE_ERROR = ("error", "Bad API response, please check API token")
+NO_CHARGER_TOKEN_ERROR = ("error", "Couldn't get charger token, please check charger ID")
+NO_CHARGER_STATE_ERROR = ("error", "Couldn't get charger state")
+
 yellow = "#ff0"
 green = "#0f0"
 white = "#fff"
 
 def main(config):
     api_token = config.str("api_token")
+    charger_id = config.str("charger_id")
     device_id = config.str("device_id") or DEFAULT_DEVICE_UUID
 
     if api_token == None:
         return render.Root(child=render.WrappedText("No API token configured"))
 
+    if charger_id == None:
+        return render.Root(child=render.WrappedText("No charger ID configured"))
 
-    charger_token = get_charger_token(api_token, device_id)
-    charger_state = get_charger_state(api_token, charger_token, device_id)
+    # Attempt to fetch charger token
+    charger_token_result = get_charger_token(api_token, charger_id, device_id)
+
+    if charger_token_result[0] == "error":
+        return render.Root(child=render.WrappedText(charger_token_result[1]))
+
+    charger_token = charger_token_result[1]
+
+    # Attempt to fetch charger state
+    charger_state_result = get_charger_state(api_token, charger_token, device_id)
+
+    if charger_state_result[0] == "error":
+        return render.Root(child=render.WrappedText(charger_state_result[1]))
+
+    charger_state = charger_state_result[1]
 
     state = config.get("state") or charger_state["state"]
 
+    # Render the UI
     info_column_content = [
         render.Padding(
             pad=(0, 0, 0, 4),
@@ -46,11 +67,12 @@ def main(config):
     if state == "charging" or state == "plugged":
         kwh = config.get("kwh") or charger_state["charging"]["wh_energy"] / 1000
 
-        info_column_content.append(render.Text(
-            content="+" + str(percision_one(kwh)) + " kWh",
-            font="tom-thumb",
-            color=state == "charging" and green or yellow,
-        ))
+        if kwh != None:
+            info_column_content.append(render.Text(
+                content="+" + str(percision_one(kwh)) + " kWh",
+                font="tom-thumb",
+                color=state == "charging" and green or yellow,
+            ))
 
     columns = [
         render.Column(
@@ -92,11 +114,11 @@ def main(config):
         )
     )
 
-def get_charger_token(api_token, device_id):
+def get_charger_token(api_token, charger_id, device_id):
     cached_token = cache.get("charger_token")
 
     if cached_token:
-        return cached_token
+        return ("ok", cached_token)
 
     url = API_BASE + API_METHOD
     payload = {
@@ -107,18 +129,26 @@ def get_charger_token(api_token, device_id):
     response = http.post(url, json_body=payload)
 
     if response.status_code != 200:
-        fail("Failed to get charger state, received status code %s" % response.status_code)
+        return BAD_API_RESPONSE_ERROR
 
     body = response.json()
 
     if body["success"] != True:
-        fail("Failed to get charger token: " + body["error_message"])
+        return BAD_API_RESPONSE_ERROR
 
-    token = body["units"][0]["token"]
+    token = None
 
-    cache.set("charger_token", token, 60 * 60 * 24)
+    for unit in body["units"]:
+        if unit["unit_id"] == charger_id:
+            token = unit["token"]
+            break
 
-    return token
+    if token == None:
+        return NO_CHARGER_TOKEN_ERROR
+
+    cache.set(charger_id + "/charger_token", token, 60 * 60)
+
+    return ("ok", token)
 
 def get_charger_state(api_token, charger_token, device_id):
     url = API_BASE + SECURE_API_METHOD
@@ -131,14 +161,14 @@ def get_charger_state(api_token, charger_token, device_id):
     response = http.post(url, json_body=payload)
 
     if response.status_code != 200:
-        fail("Failed to get charger state, received status code %s" % response.status_code)
+        return BAD_API_RESPONSE_ERROR
 
     body = response.json()
 
     if body["success"] != True:
-        fail("Failed to get charger state: %s" % body["error_message"])
+        return BAD_API_RESPONSE_ERROR
 
-    return body
+    return ("ok", body)
 
 def charging_animation():
     return animation.Transformation(
